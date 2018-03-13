@@ -2,6 +2,7 @@
 
 require 'http_signatures/algorithm'
 require 'http_signatures/algorithm/hmac'
+require 'http_signatures/algorithm/rsa'
 require 'http_signatures/context'
 require 'http_signatures/header_list'
 require 'http_signatures/key'
