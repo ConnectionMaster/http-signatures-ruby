@@ -14,4 +14,4 @@ Style/ExpandPathArguments:
     - http_signatures.gemspec
 
 Metrics/LineLength:
-  Max: 110
+  Max: 200

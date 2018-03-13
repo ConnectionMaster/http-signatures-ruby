@@ -6,6 +6,8 @@ module HttpSignatures
       case name
       when 'hmac-sha1' then Hmac.new('sha1')
       when 'hmac-sha256' then Hmac.new('sha256')
+      when 'rsa-sha1' then Rsa.new('sha1')
+      when 'rsa-sha256' then Rsa.new('sha256')
       else raise UnknownAlgorithm, name
       end
     end

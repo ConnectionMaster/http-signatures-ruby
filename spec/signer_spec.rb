@@ -3,21 +3,21 @@
 require 'net/http'
 
 RSpec.describe HttpSignatures::Signer do
-  EXAMPLE_DATE = 'Mon, 28 Jul 2014 15:39:13 -0700'
+  # Use the test request from:
+  #  https://tools.ietf.org/html/draft-cavage-http-signatures-09#appendix-C
+  EXAMPLE_DATE = 'Sun, 05 Jan 2014 21:31:40 GMT'
+  HEADERS = %w[(request-target) host date content-type digest content-length].freeze
 
-  subject(:signer) do
-    HttpSignatures::Signer.new(key: key, algorithm: algorithm, header_list: header_list)
-  end
-  let(:key) { HttpSignatures::Key.new(id: 'pda', secret: 'sh') }
-  let(:algorithm) { HttpSignatures::Algorithm::Hmac.new('sha256') }
-  let(:header_list) { HttpSignatures::HeaderList.new(['date', 'content-type']) }
+  let(:header_list) { HttpSignatures::HeaderList.new(HEADERS) }
 
   let(:message) do
-    Net::HTTP::Get.new(
-      '/path?query=123',
+    Net::HTTP::Post.new(
+      '/foo?param=value&pet=dog',
+      'Host' => 'example.com',
       'Date' => EXAMPLE_DATE,
-      'Content-Type' => 'text/plain',
-      'Content-Length' => '123'
+      'Digest' => 'SHA-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=',
+      'Content-Type' => 'application/json',
+      'Content-Length' => '18'
     )
   end
 
@@ -45,43 +45,123 @@ RSpec.describe HttpSignatures::Signer do
     }x
   end
 
-  describe '#sign' do
-    it 'passes correct signing string to algorithm' do
-      expect(algorithm).to receive(:sign).with(
-        'sh',
-        ["date: #{EXAMPLE_DATE}", 'content-type: text/plain'].join("\n")
-      ).at_least(:once).and_return('static')
-      signer.sign(message)
+  context 'using hmac-sha256' do
+    let(:key) { HttpSignatures::Key.new(id: 'Test', secret: 'sh') }
+    let(:algorithm) { HttpSignatures::Algorithm::Hmac.new('sha256') }
+
+    subject(:signer) do
+      HttpSignatures::Signer.new(key: key, algorithm: algorithm, header_list: header_list)
     end
 
-    it 'returns reference to the mutated input' do
-      expect(signer.sign(message)).to eq(message)
+    describe '#sign' do
+      it 'passes correct signing string to algorithm' do
+        expect(algorithm).to receive(:sign).with(
+          'sh',
+          ['(request-target): post /foo?param=value&pet=dog',
+           'host: example.com',
+           'date: Sun, 05 Jan 2014 21:31:40 GMT',
+           'content-type: application/json',
+           'digest: SHA-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=',
+           'content-length: 18'].join("\n")
+        ).at_least(:once).and_return('static')
+        signer.sign(message)
+      end
+
+      it 'returns reference to the mutated input' do
+        expect(signer.sign(message)).to eq(message)
+      end
+    end
+
+    context 'after signing' do
+      before { signer.sign(message) }
+
+      it 'has valid Authorization header structure' do
+        expect(message['Authorization']).to match(authorization_structure_pattern)
+      end
+
+      it 'has valid Signature header structure' do
+        expect(message['Signature']).to match(signature_structure_pattern)
+      end
+
+      it 'matches expected Authorization header' do
+        expected = [
+          'Signature keyId="Test"',
+          'algorithm="hmac-sha256"',
+          'headers="(request-target) host date content-type digest content-length"',
+          'signature="cAFOUAMtTZeGDdgR3kCbXXw9eJqN266+LOZrrC6Xe+o="'
+        ].join(',')
+        expect(message['Authorization']).to eq(expected)
+      end
+
+      it 'matches expected Signature header' do
+        expected = [
+          'keyId="Test"',
+          'algorithm="hmac-sha256"',
+          'headers="(request-target) host date content-type digest content-length"',
+          'signature="cAFOUAMtTZeGDdgR3kCbXXw9eJqN266+LOZrrC6Xe+o="'
+        ].join(',')
+        expect(message['Signature']).to eq(expected)
+      end
     end
   end
 
-  context 'after signing' do
-    before { signer.sign(message) }
+  context 'using rsa-sha256' do
+    let(:key) { HttpSignatures::Key.new(id: 'Test', secret: File.read('spec/files/test.pem')) }
+    let(:algorithm) { HttpSignatures::Algorithm::Rsa.new('sha256') }
 
-    it 'has valid Authorization header structure' do
-      expect(message['Authorization']).to match(authorization_structure_pattern)
+    subject(:signer) do
+      HttpSignatures::Signer.new(key: key, algorithm: algorithm, header_list: header_list)
     end
 
-    it 'has valid Signature header structure' do
-      expect(message['Signature']).to match(signature_structure_pattern)
+    describe '#sign' do
+      it 'passes correct signing string to algorithm' do
+        expect(algorithm).to receive(:sign).with(
+          anything,
+          ['(request-target): post /foo?param=value&pet=dog',
+           'host: example.com',
+           'date: Sun, 05 Jan 2014 21:31:40 GMT',
+           'content-type: application/json',
+           'digest: SHA-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=',
+           'content-length: 18'].join("\n")
+        ).at_least(:once).and_return('static')
+        signer.sign(message)
+      end
+
+      it 'returns reference to the mutated input' do
+        expect(signer.sign(message)).to eq(message)
+      end
     end
 
-    it 'matches expected Authorization header' do
-      expect(message['Authorization']).to eq(
-        'Signature keyId="pda",algorithm="hmac-sha256",' \
-          'headers="date content-type",signature="0ZoJq6cxYZRXe+TN85whSuQgJsam1tRyIal7ni+RMXA="'
-      )
-    end
+    context 'after signing' do
+      before { signer.sign(message) }
 
-    it 'matches expected Signature header' do
-      expect(message['Signature']).to eq(
-        'keyId="pda",algorithm="hmac-sha256",' \
-          'headers="date content-type",signature="0ZoJq6cxYZRXe+TN85whSuQgJsam1tRyIal7ni+RMXA="'
-      )
+      it 'has valid Authorization header structure' do
+        expect(message['Authorization']).to match(authorization_structure_pattern)
+      end
+
+      it 'has valid Signature header structure' do
+        expect(message['Signature']).to match(signature_structure_pattern)
+      end
+
+      it 'matches expected Authorization header' do
+        expected = [
+          'Signature keyId="Test"',
+          'algorithm="rsa-sha256"',
+          'headers="(request-target) host date content-type digest content-length"',
+          'signature="vSdrb+dS3EceC9bcwHSo4MlyKS59iFIrhgYkz8+oVLEEzmYZZvRs8rgOp+63LEM3v+MFHB32NfpB2bEKBIvB1q52LaEUHFv120V01IL+TAD48XaERZFukWgHoBTLMhYS2Gb51gWxpeIq8knRmPnYePbF5MOkR0Zkly4zKH7s1dE="'
+        ].join(',')
+        expect(message['Authorization']).to eq(expected)
+      end
+
+      it 'matches expected Signature header' do
+        expected = [
+          'keyId="Test"',
+          'algorithm="rsa-sha256"',
+          'headers="(request-target) host date content-type digest content-length"',
+          'signature="vSdrb+dS3EceC9bcwHSo4MlyKS59iFIrhgYkz8+oVLEEzmYZZvRs8rgOp+63LEM3v+MFHB32NfpB2bEKBIvB1q52LaEUHFv120V01IL+TAD48XaERZFukWgHoBTLMhYS2Gb51gWxpeIq8knRmPnYePbF5MOkR0Zkly4zKH7s1dE="'
+        ].join(',')
+        expect(message['Signature']).to eq(expected)
+      end
     end
   end
 end
